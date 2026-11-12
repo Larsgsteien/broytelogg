@@ -267,7 +267,7 @@ const mFmt=m=>m<950?Math.round(m)+" m":(m/1000).toFixed(1).replace(".",",")+" km
 function varighet(ms){ const min=Math.floor(ms/60000); return Math.floor(min/60)+":"+String(min%60).padStart(2,"0"); }
 
 /* ================= GPS / tur ================= */
-let tur=null, watchId=null, sistePos=null, gpsOk=false, tickTimer=null, sisteFart=null;
+let tur=null, watchId=null, sistePos=null, gpsOk=false, tickTimer=null, sisteFart=null, sisteListePos=null;
 let avvist=new Set(), sistVarsletId=null;
 function gpsStatusTekst(){
   let t=gpsOk?'<span class="puls"></span>GPS aktiv':"Venter på GPS …";
@@ -303,7 +303,12 @@ function startTur(){
       sistePos=pos;
       vurderNaerhet();
     }
-    if(gjeldendeFane()==="broyt") oppdaterTurpanel();
+    if(gjeldendeFane()==="broyt"){
+      // Tegn lista på nytt når du har flyttet deg et stykke — da følger
+      // avstander, sortering og «Neste» med dit du faktisk er
+      if(!sisteListePos || haversine(sisteListePos,sistePos)>50){ sisteListePos={...sistePos}; tegn(); }
+      else oppdaterTurpanel();
+    }
     if(gjeldendeFane()==="kart") oppdaterKartSpor();
   },err=>{
     gpsOk=false;
