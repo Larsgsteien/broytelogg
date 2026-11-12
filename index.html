@@ -223,8 +223,15 @@ const mFmt=m=>m<950?Math.round(m)+" m":(m/1000).toFixed(1).replace(".",",")+" km
 function varighet(ms){ const min=Math.floor(ms/60000); return Math.floor(min/60)+":"+String(min%60).padStart(2,"0"); }
 
 /* ================= GPS / tur ================= */
-let tur=null, watchId=null, sistePos=null, gpsOk=false, tickTimer=null;
+let tur=null, watchId=null, sistePos=null, gpsOk=false, tickTimer=null, sisteFart=null;
 let avvist=new Set(), sistVarsletId=null;
+function gpsStatusTekst(){
+  let t=gpsOk?'<span class="puls"></span>GPS aktiv':"Venter på GPS …";
+  if(sistePos) t+=` · ±${Math.round(sistePos.acc)} m`;
+  if(gpsOk && sisteFart!=null) t+=` · ${Math.round(sisteFart*3.6)} km/t`;
+  if(tur && gpsOk && tur.meter<10) t+=" — distansen teller når du kjører";
+  return t;
+}
 function haversine(a,b){
   const R=6371000, rad=x=>x*Math.PI/180;
   const dLat=rad(b.lat-a.lat), dLng=rad(b.lng-a.lng);
@@ -238,6 +245,7 @@ function startTur(){
   watchId=navigator.geolocation.watchPosition(p=>{
     const pos={lat:p.coords.latitude, lng:p.coords.longitude, acc:p.coords.accuracy, t:Date.now()};
     gpsOk=true;
+    sisteFart=(p.coords.speed!=null && isFinite(p.coords.speed) && p.coords.speed>=0)?p.coords.speed:null;
     if(pos.acc<=60){
       if(sistePos){
         const d=haversine(sistePos,pos);
@@ -323,7 +331,7 @@ function turpanelHtml(){
   if(!tur) return `<div class="turpanel"><div class="gps-status">Turmodus: GPS logger tid og kjørt distanse automatisk.</div>
     <div class="btnrow" style="margin-top:10px"><button class="btn-logg" id="start-tur">Start tur</button></div></div>`;
   const ms=Date.now()-new Date(tur.start);
-  return `<div class="turpanel aktiv"><div class="gps-status ${gpsOk?"god":""}">${gpsOk?'<span class="puls"></span>GPS aktiv':"Venter på GPS …"}${sistePos?` · ±${Math.round(sistePos.acc)} m`:""}</div>
+  return `<div class="turpanel aktiv"><div class="gps-status ${gpsOk?"god":""}">${gpsStatusTekst()}</div>
     <div class="turstat">
       <div><div class="tall" id="tur-km">${mFmt(tur.meter)}</div><div class="navn">Distanse</div></div>
       <div><div class="tall" id="tur-tid">${varighet(ms)}</div><div class="navn">Tid (t:min)</div></div>
@@ -338,7 +346,7 @@ function oppdaterTurpanel(){
   if(km) km.textContent=mFmt(tur.meter);
   if(tid) tid.textContent=varighet(Date.now()-new Date(tur.start));
   const st=document.querySelector(".turpanel .gps-status");
-  if(st){ st.className="gps-status"+(gpsOk?" god":""); st.innerHTML=(gpsOk?'<span class="puls"></span>GPS aktiv':"Venter på GPS …")+(sistePos?` · ±${Math.round(sistePos.acc)} m`:""); }
+  if(st){ st.className="gps-status"+(gpsOk?" god":""); st.innerHTML=gpsStatusTekst(); }
   const nv=$("#naervarsel"); if(nv) nv.innerHTML=naervarselHtml();
 }
 function kundekort({k,sist,avstand}){
