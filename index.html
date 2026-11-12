@@ -54,6 +54,8 @@ h2{font-family:var(--font-display); font-size:22px; text-transform:uppercase; le
 .sist{font-size:13px; color:var(--muted); margin-top:4px}
 .sist .fersk{color:var(--ok)}
 .hindring{margin-top:6px; font-size:13px; color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,transparent); border-radius:8px; padding:5px 9px}
+.naervarsel{background:color-mix(in srgb,var(--ok) 10%,var(--surface)); border:1px solid var(--ok); border-radius:12px; padding:12px; margin-top:10px}
+.naervarsel .tittel{font-family:var(--font-display); font-size:19px; text-transform:uppercase; letter-spacing:.5px}
 .btnrow{display:flex; gap:8px; margin-top:12px; flex-wrap:wrap}
 button{font:inherit; border:0; border-radius:10px; cursor:pointer; color:var(--fg)}
 .btn-logg{flex:1; min-width:120px; background:var(--accent); color:var(--accent-fg); font-weight:700; font-size:16px; padding:13px 10px; font-family:var(--font-display); text-transform:uppercase; letter-spacing:.8px}
@@ -220,6 +222,7 @@ function varighet(ms){ const min=Math.floor(ms/60000); return Math.floor(min/60)
 
 /* ================= GPS / tur ================= */
 let tur=null, watchId=null, sistePos=null, gpsOk=false, tickTimer=null;
+let avvist=new Set(), sistVarsletId=null;
 function haversine(a,b){
   const R=6371000, rad=x=>x*Math.PI/180;
   const dLat=rad(b.lat-a.lat), dLng=rad(b.lng-a.lng);
@@ -229,7 +232,7 @@ function haversine(a,b){
 function startTur(){
   if(!navigator.geolocation){ visToast("Denne enheten gir ikke fra seg posisjon.",null); return; }
   tur={id:nyId(), start:new Date().toISOString(), meter:0, punkter:[], jobbIder:[]};
-  gpsOk=false;
+  gpsOk=false; avvist=new Set(); sistVarsletId=null;
   watchId=navigator.geolocation.watchPosition(p=>{
     const pos={lat:p.coords.latitude, lng:p.coords.longitude, acc:p.coords.accuracy, t:Date.now()};
     gpsOk=true;
@@ -285,6 +288,35 @@ function sisteJobbFor(kid){
   for(const j of state.jobber) if(j.kundeId===kid && (!best||j.ts>best.ts)) best=j;
   return best;
 }
+/* Nærhetsvarsel: under aktiv tur, finn nærmeste kunde (<100 m) som ikke er
+   logget siste 6 t og ikke avvist i denne turen — mLogg/AutoReg-aktig autologging,
+   med hindringsvarsel når du nærmer deg (punktvarsel). */
+function naerKunde(){
+  if(!tur||!sistePos) return null;
+  let best=null;
+  for(const k of state.kunder){
+    if(k.aktiv===false||k.lat==null||avvist.has(k.id)) continue;
+    const s=sisteJobbFor(k.id);
+    if(s && (Date.now()-new Date(s.ts))<6*3600e3) continue;
+    const d=haversine(sistePos,{lat:k.lat,lng:k.lng});
+    if(d<=100 && (!best||d<best.d)) best={k,d};
+  }
+  return best;
+}
+function naervarselHtml(){
+  const n=naerKunde();
+  if(!n){ sistVarsletId=null; return ""; }
+  if(n.k.id!==sistVarsletId){
+    sistVarsletId=n.k.id;
+    try{ navigator.vibrate&&navigator.vibrate(200); }catch{}
+  }
+  return `<div class="naervarsel"><div class="tittel">Du er ved ${esc(n.k.navn)}</div>
+    <div class="under">${mFmt(n.d)} unna</div>
+    ${n.k.hindring?`<div class="hindring">⚠ ${esc(n.k.hindring)}</div>`:""}
+    <div class="btnrow"><button class="btn-logg" data-logg="${n.k.id}" data-type="broyting">Brøytet nå</button>
+    <button class="btn-sek" data-logg="${n.k.id}" data-type="stroing">Strødd</button>
+    <button class="btn-ghost" data-avvis="${n.k.id}" style="flex:0 1 auto">Ikke nå</button></div></div>`;
+}
 function turpanelHtml(){
   if(!tur) return `<div class="turpanel"><div class="gps-status">Turmodus: GPS logger tid og kjørt distanse automatisk.</div>
     <div class="btnrow" style="margin-top:10px"><button class="btn-logg" id="start-tur">Start tur</button></div></div>`;
@@ -295,7 +327,8 @@ function turpanelHtml(){
       <div><div class="tall" id="tur-tid">${varighet(ms)}</div><div class="navn">Tid (t:min)</div></div>
       <div><div class="tall">${tur.jobbIder.length}</div><div class="navn">Logget</div></div>
     </div>
-    <div class="btnrow" style="margin-top:0"><button class="btn-sek" id="stopp-tur" style="border-color:var(--danger);color:var(--danger)">Avslutt tur</button></div></div>`;
+    <div id="naervarsel">${naervarselHtml()}</div>
+    <div class="btnrow" style="margin-top:10px"><button class="btn-sek" id="stopp-tur" style="border-color:var(--danger);color:var(--danger)">Avslutt tur</button></div></div>`;
 }
 function oppdaterTurpanel(){
   if(!tur) return;
@@ -304,6 +337,7 @@ function oppdaterTurpanel(){
   if(tid) tid.textContent=varighet(Date.now()-new Date(tur.start));
   const st=document.querySelector(".turpanel .gps-status");
   if(st){ st.className="gps-status"+(gpsOk?" god":""); st.innerHTML=(gpsOk?'<span class="puls"></span>GPS aktiv':"Venter på GPS …")+(sistePos?` · ±${Math.round(sistePos.acc)} m`:""); }
+  const nv=$("#naervarsel"); if(nv) nv.innerHTML=naervarselHtml();
 }
 function kundekort({k,sist,avstand}){
   const t=sist?relTid(sist.ts):"aldri logget";
@@ -373,7 +407,7 @@ function tegnKart(){
   kartObj=L.map("kart").setView(senter,zoom);
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(kartObj);
   for(const k of medPos){
-    const m=L.marker([k.lat,k.lng]).addTo(kartObj).bindPopup("<b>"+esc(k.navn)+"</b><br>"+esc(k.adresse||""));
+    const m=L.marker([k.lat,k.lng]).addTo(kartObj).bindPopup("<b>"+esc(k.navn)+"</b><br>"+esc(k.adresse||"")+(k.hindring?"<br>⚠ "+esc(k.hindring):""));
     kundeMarkorer.push(m);
   }
   oppdaterKartSpor();
@@ -406,7 +440,8 @@ function tegnLogg(){
         <button class="btn-ghost" data-slettjobb="${j.id}" aria-label="Slett">✕</button></div></div>`;
     }else{
       const t=r.t, ms=new Date(t.slutt)-new Date(t.start);
-      html+=`<div class="loggrad"><div class="hva">Tur <span class="type-pill type-tur">GPS</span><div class="under">${mFmt(t.meter)} · ${varighet(ms)} t · ${t.jobbIder.length} logget</div></div>
+      const kundenavn=t.jobbIder.map(id=>{const j=state.jobber.find(x=>x.id===id);return j?j.kundeNavn:null;}).filter(Boolean).join(", ");
+      html+=`<div class="loggrad"><div class="hva">Tur <span class="type-pill type-tur">GPS</span><div class="under">${mFmt(t.meter)} · ${varighet(ms)} t · ${t.jobbIder.length} logget${kundenavn?": "+esc(kundenavn):""}</div></div>
         <div style="display:flex;gap:8px;align-items:center"><span class="tid">${klokke(t.start)}–${klokke(t.slutt)}</span>
         <button class="btn-ghost" data-sletttur="${t.id}" aria-label="Slett">✕</button></div></div>`;
     }
@@ -550,6 +585,8 @@ document.addEventListener("click",e=>{
     tegn();
     return;
   }
+  const av=e.target.closest("[data-avvis]");
+  if(av){ avvist.add(av.dataset.avvis); const nv=$("#naervarsel"); if(nv) nv.innerHTML=naervarselHtml(); return; }
   const rd=e.target.closest("[data-rediger]");
   if(rd){ redigerId=rd.dataset.rediger; tegn(); window.scrollTo({top:0}); return; }
   const posKnapp=e.target.closest("[data-posisjon]");
