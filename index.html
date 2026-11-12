@@ -274,7 +274,7 @@ function haversine(a,b){
 function startTur(){
   if(!navigator.geolocation){ visToast("Denne enheten gir ikke fra seg posisjon.",null); return; }
   tur={id:nyId(), start:new Date().toISOString(), meter:0, punkter:[], jobbIder:[]};
-  gpsOk=false; avvist=new Set(); sistVarsletId=null;
+  gpsOk=false; avvist=new Set(); sistVarsletId=null; sisteAutoPos=null; naerSiden=null; naerId=null;
   watchId=navigator.geolocation.watchPosition(p=>{
     const pos={lat:p.coords.latitude, lng:p.coords.longitude, acc:p.coords.accuracy, t:Date.now()};
     gpsOk=true;
@@ -350,8 +350,10 @@ function sisteJobbFor(kid){
 /* Autologging: å kjøre FORBI en kunde skal ikke gi en loggført brøyting — det
    ville gitt feil på fakturaen. Derfor kreves at du blir værende nær kunden en
    stund, slik man gjør når man faktisk måker. Forbikjøring tar sekunder. */
-const NAER_RADIUS=100, AUTO_RADIUS=40, FORLAT_RADIUS=70, AUTO_SEK=45;
-let naerSiden=null, naerId=null, varselSignatur=null;
+const NAER_RADIUS=100, AUTO_RADIUS=40, FORLAT_RADIUS=70, AUTO_SEK=15;
+const KJORE_FART=2.5;      // m/s (9 km/t) — over dette regnes du som kjørende, ikke arbeidende
+const FLYTT_ETTER_AUTO=60; // m du må flytte deg før neste autologg kan skje
+let naerSiden=null, naerId=null, varselSignatur=null, sisteAutoPos=null;
 const autologgPa=()=>state.innstillinger?state.innstillinger.autologg!==false:true;
 
 function naerKunde(){
@@ -366,16 +368,26 @@ function naerKunde(){
   }
   return best;
 }
+// Sperre rett etter en autologg: står du fortsatt og måker hos Hansen, skal ikke
+// naboen Jensen 35 m unna bli logget også. Du må flytte deg først.
+function autologgSperret(){
+  if(!sisteAutoPos||!sistePos) return false;
+  return haversine(sistePos,sisteAutoPos)<FLYTT_ETTER_AUTO;
+}
 // Kalles ved hver GPS-oppdatering: holder styr på hvor lenge du har stått ved kunden
 function vurderNaerhet(){
   if(!tur||!sistePos){ naerSiden=null; naerId=null; return; }
   const n=naerKunde();
   if(!n){ naerSiden=null; naerId=null; return; }
-  if(n.k.id!==naerId){ naerId=n.k.id; naerSiden=n.d<=AUTO_RADIUS?Date.now():null; }
+  // Holder du fart, kjører du — da teller ikke oppholdet
+  const kjorer=sisteFart!=null && sisteFart>KJORE_FART;
+  if(n.k.id!==naerId){ naerId=n.k.id; naerSiden=(n.d<=AUTO_RADIUS&&!kjorer)?Date.now():null; }
+  else if(kjorer){ naerSiden=null; }
   else if(n.d<=AUTO_RADIUS){ if(naerSiden==null) naerSiden=Date.now(); }
   else if(n.d>FORLAT_RADIUS){ naerSiden=null; }   // kjørte videre — nullstill klokka
-  if(autologgPa() && naerSiden!=null && Date.now()-naerSiden>=AUTO_SEK*1000){
+  if(autologgPa() && !autologgSperret() && naerSiden!=null && Date.now()-naerSiden>=AUTO_SEK*1000){
     naerSiden=null; naerId=null;
+    sisteAutoPos={lat:sistePos.lat,lng:sistePos.lng};
     loggJobb(n.k,"broyting",true);
   }
 }
@@ -391,9 +403,10 @@ function naervarselHtml(){
     try{ navigator.vibrate&&navigator.vibrate(200); }catch{}
   }
   const igjen=sekunderIgjen();
-  const nedtelling=(autologgPa()&&igjen!=null)
-    ? `<div class="under">Logges automatisk om <span id="auto-ned">${igjen}</span> s — kjør videre for å avbryte</div>`
-    : (autologgPa() ? '<div class="under">Stopp ved kunden, så logges brøytingen av seg selv</div>' : "");
+  const nedtelling=!autologgPa() ? ""
+    : autologgSperret() ? '<div class="under">Flytt deg litt unna forrige kunde før neste autologg</div>'
+    : igjen!=null ? `<div class="under">Logges automatisk om <span id="auto-ned">${igjen}</span> s — kjør videre for å avbryte</div>`
+    : '<div class="under">Stopp ved kunden, så logges brøytingen av seg selv</div>';
   return `<div class="naervarsel"><div class="tittel">Du er ved ${esc(n.k.navn)}</div>
     <div class="under">${mFmt(n.d)} unna</div>
     ${nedtelling}
@@ -428,7 +441,7 @@ function oppdaterTurpanel(){
   const nv=$("#naervarsel");
   if(nv){
     const n=naerKunde();
-    const sig=(n?n.k.id:"-")+":"+(naerSiden!=null?"ned":"vent")+":"+(autologgPa()?"på":"av");
+    const sig=(n?n.k.id:"-")+":"+(naerSiden!=null?"ned":"vent")+":"+(autologgPa()?"på":"av")+":"+(autologgSperret()?"sperr":"fri");
     if(sig!==varselSignatur){ nv.innerHTML=naervarselHtml(); varselSignatur=sig; }
     else{
       const ned=$("#auto-ned"), igjen=sekunderIgjen();
@@ -499,7 +512,7 @@ function kobleTurknapper(){
     if(!a.checked) naerSiden=null;
     lagre();
     varselSignatur=null; oppdaterTurpanel();
-    visToast(a.checked?"Autologg på — stopp ved kunden i 45 sekunder":"Autologg av — du logger selv",null);
+    visToast(a.checked?("Autologg på — stopp ved kunden i "+AUTO_SEK+" sekunder"):"Autologg av — du logger selv",null);
   });
 }
 function tegnKart(){
