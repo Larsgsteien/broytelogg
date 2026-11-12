@@ -105,6 +105,12 @@ input,select,textarea{
 input:focus,select:focus,button:focus-visible,a:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 .to-kol{display:flex; gap:10px; flex-wrap:wrap}
 .to-kol>label{flex:1; min-width:140px}
+.adrtreff{display:flex; flex-direction:column; gap:3px; margin-top:5px}
+.adrtreff button{text-align:left; background:var(--surface2); border:1px solid var(--line); color:var(--fg);
+  padding:9px 11px; font-size:13px; border-radius:8px; text-transform:none; letter-spacing:0; font-weight:400}
+.adrtreff button:hover,.adrtreff button:focus-visible{border-color:var(--accent)}
+.adrstatus{font-size:12px; color:var(--muted); margin-top:5px; text-transform:none; letter-spacing:0}
+.adrstatus.ok{color:var(--ok)}
 .loggdag{color:var(--muted); font-size:12px; letter-spacing:.08em; text-transform:uppercase; margin:16px 0 6px}
 .loggrad{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 12px; background:var(--surface); border:1px solid var(--line); border-radius:10px; margin-bottom:6px}
 .loggrad .hva{min-width:0}
@@ -408,7 +414,7 @@ function kobleTurknapper(){
   const p=$("#stopp-tur"); if(p) p.addEventListener("click",stoppTur);
 }
 function tegnKart(){
-  innhold.innerHTML='<h2>Kart</h2><div id="kart"></div><div class="notis">Gult spor: pågående/siste tur. Markører: kunder med lagret posisjon (bruk «Hent posisjon» på kunden mens du står der).</div>';
+  innhold.innerHTML='<h2>Kart</h2><div id="kart"></div><div class="notis">Gult spor: pågående eller siste tur. Markører: kunder med lagret posisjon.</div>';
   if(typeof L==="undefined"){ $("#kart").outerHTML='<div class="tom">Kartet trenger nett for å laste første gang.</div>'; return; }
   const medPos=state.kunder.filter(k=>k.lat!=null);
   let senter=[65.0,13.0], zoom=4;
@@ -459,12 +465,61 @@ function tegnLogg(){
   html+='<div class="notis">Viser de siste 200 radene.</div>';
   innhold.innerHTML=html;
 }
+/* ===== Adressesøk mot Kartverket (ws.geonorge.no) =====
+   Gir koordinater rett fra adressen, så man slipper å kjøre dit for å pinne GPS. */
+let adrPos=null, adrTimer=null;
+function kobleAdressesok(){
+  const inp=$("#f-adresse"); if(!inp) return;
+  inp.addEventListener("input",()=>{
+    adrPos=null;
+    const st=$("#adr-status"); if(st){ st.textContent=""; st.className="adrstatus"; }
+    clearTimeout(adrTimer);
+    const q=inp.value.trim();
+    const boks=$("#adr-treff");
+    if(q.length<3){ if(boks){ boks.hidden=true; boks.innerHTML=""; } return; }
+    adrTimer=setTimeout(()=>sokAdresse(q),400);
+  });
+}
+async function sokAdresse(q){
+  const boks=$("#adr-treff"), st=$("#adr-status");
+  if(!boks||!st) return;
+  st.textContent="Søker …"; st.className="adrstatus";
+  let treff=[];
+  try{
+    const r=await fetch("https://ws.geonorge.no/adresser/v1/sok?fuzzy=true&treffPerSide=6&sok="+encodeURIComponent(q));
+    if(!r.ok) throw new Error("status "+r.status);
+    const j=await r.json();
+    treff=(j.adresser||[]).filter(a=>a.representasjonspunkt);
+  }catch{
+    boks.hidden=true; boks.innerHTML="";
+    st.textContent="Fikk ikke kontakt med adressesøket. Skriv adressen fritt — du kan sette posisjonen med GPS senere.";
+    return;
+  }
+  if($("#f-adresse").value.trim()!==q) return;   // brukeren har skrevet videre
+  if(!treff.length){
+    boks.hidden=true; boks.innerHTML="";
+    st.textContent="Fant ingen adresse. Skriv den fritt — du kan sette posisjonen med GPS når du står der.";
+    return;
+  }
+  st.textContent="";
+  boks.hidden=false;
+  boks.innerHTML=treff.map((a,i)=>`<button type="button" data-adr="${i}">${esc(a.adressetekst)} — ${esc(a.postnummer+" "+a.poststed)}</button>`).join("");
+  boks.querySelectorAll("[data-adr]").forEach(b=>b.addEventListener("click",()=>{
+    const a=treff[+b.dataset.adr];
+    $("#f-adresse").value=a.adressetekst+", "+a.postnummer+" "+a.poststed;
+    adrPos={lat:a.representasjonspunkt.lat, lng:a.representasjonspunkt.lon};
+    boks.hidden=true; boks.innerHTML="";
+    st.textContent="Posisjon hentet fra adressen ✓"; st.className="adrstatus ok";
+  }));
+}
 function tegnKunder(){
+  adrPos=null; clearTimeout(adrTimer);
   const roder=[...new Set([...state.kunder.map(k=>(k.rode||"").trim()).filter(Boolean), ...STANDARD_RODER])].sort((a,b)=>a.localeCompare(b,"nb"));
   const red=redigerId?state.kunder.find(k=>k.id===redigerId):null;
   let html=`<h2>${red?"Endre kunde":"Ny kunde"}</h2><div class="card"><form class="skjema" id="kundeskjema">`+
     `<label>Navn<input id="f-navn" required maxlength="80" placeholder="Hansen, Fjellveien 12" value="${red?esc(red.navn):""}"></label>`+
-    `<label>Adresse<input id="f-adresse" maxlength="120" placeholder="Fjellveien 12, Setermoen" value="${red?esc(red.adresse||""):""}"></label>`+
+    `<label>Adresse<input id="f-adresse" maxlength="120" autocomplete="off" placeholder="Begynn å skrive, velg i lista" value="${red?esc(red.adresse||""):""}">`+
+      `<div id="adr-treff" class="adrtreff" hidden></div><div id="adr-status" class="adrstatus"></div></label>`+
     '<div class="to-kol">'+
     `<label>Rode / rute<input id="f-rode" maxlength="60" list="rodeliste" placeholder="Setermoen sentrum" value="${red?esc(red.rode||""):""}"></label>`+
     `<label>Prismodell<select id="f-modell"><option value="gang"${red&&red.prismodell==="sesong"?"":" selected"}>Pris per gang</option><option value="sesong"${red&&red.prismodell==="sesong"?" selected":""}>Fastpris sesong</option></select></label>`+
@@ -487,7 +542,7 @@ function tegnKunder(){
           </div>
           <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-end">
             <button class="btn-ghost" data-rediger="${k.id}">Endre</button>
-            <button class="btn-ghost" data-posisjon="${k.id}">Hent posisjon</button>
+            <button class="btn-ghost" data-posisjon="${k.id}">Sett GPS her</button>
             <button class="btn-danger" data-slettkunde="${k.id}">Slett</button>
           </div>
         </div>
@@ -497,13 +552,17 @@ function tegnKunder(){
     '<button class="btn-sek" id="eksporter">Last ned backup (JSON)</button>'+
     '<button class="btn-sek" id="importer-knapp">Importer backup</button></div>'+
     '<input type="file" id="importer-fil" accept="application/json" hidden>'+
-    '<div class="notis">Dataene ligger lagret på denne enheten. Ta backup før du bytter telefon eller tømmer nettleserdata.</div></div>';
+    '<div class="notis">Dataene ligger lagret på denne enheten. Ta backup før du bytter telefon eller tømmer nettleserdata.</div></div>'+
+    '<div class="notis">Posisjon kan settes på to måter: velg adressen i søkelista når du oppretter kunden, eller trykk «Sett GPS her» på kundekortet mens du står på stedet — det siste er mest presist når innkjørselen ligger et stykke fra postadressen. Adressesøk: Kartverket.</div>';
   innhold.innerHTML=html;
+  kobleAdressesok();
   $("#kundeskjema").addEventListener("submit",e=>{
     e.preventDefault();
     const navn=$("#f-navn").value.trim(); if(!navn) return;
     const felt={navn, adresse:$("#f-adresse").value.trim(), rode:$("#f-rode").value.trim(),
       hindring:$("#f-hindring").value.trim(), prismodell:$("#f-modell").value, pris:Number($("#f-pris").value)||0};
+    // Posisjon fra adressesøket. Uten valgt treff beholdes kundens eksisterende posisjon.
+    if(adrPos){ felt.lat=adrPos.lat; felt.lng=adrPos.lng; }
     if(redigerId){
       const k=state.kunder.find(x=>x.id===redigerId);
       if(k) Object.assign(k,felt);
@@ -611,7 +670,7 @@ document.addEventListener("click",e=>{
     navigator.geolocation.getCurrentPosition(p=>{
       k.lat=p.coords.latitude; k.lng=p.coords.longitude; lagre(); tegn();
       visToast("Posisjon lagret for "+k.navn,null);
-    },err=>{ posKnapp.textContent="Hent posisjon"; visToast(err.code===1?"Posisjon avslått i nettleseren.":"Fikk ikke posisjon.",null); },
+    },err=>{ posKnapp.textContent="Sett GPS her"; visToast(err.code===1?"Posisjon avslått i nettleseren.":"Fikk ikke posisjon.",null); },
     {enableHighAccuracy:true, timeout:15000});
     return;
   }
