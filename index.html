@@ -625,7 +625,7 @@ function tegnKart(){
 }
 /* ===== Kjøremodus: rute i appens eget kart, med anvisningene synlige =====
    Ruting via OSRM (OpenStreetMap). Faller tilbake til luftlinje uten nett. */
-let posMarkor=null, ruteLag=null, ruteHentetFra=null, ruteNesteId=null, ruteInfo=null, ruteTimer=0;
+let posMarkor=null, ruteLag=null, ruteHentetFra=null, ruteNesteId=null, ruteInfo=null, ruteTimer=0, folgModus=true;
 function oppdaterNavBanner(){
   const b=$("#nav-banner"); if(!b) return;
   const n=nesteKunde();
