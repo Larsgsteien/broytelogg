@@ -327,7 +327,7 @@ function stoppTur(){
 /* ================= visninger ================= */
 const FANER=["broyt","kart","logg","kunder","oversikt"];
 let redigerId=null, periodeValg="sesong", sisteJobbId=null, toastTimer=null;
-let kartObj=null, sporLinje=null, kundeMarkorer=[];
+let kartObj=null, sporLinje=null, kundeMarkorer=[], valgtTurId=null;
 function gjeldendeFane(){ const h=(location.hash||"").replace("#",""); return FANER.includes(h)?h:"broyt"; }
 function tegn(){
   const fane=gjeldendeFane();
@@ -518,12 +518,22 @@ function kobleTurknapper(){
     visToast(a.checked?("Autologg på — stopp ved kunden i "+AUTO_SEK+" sekunder"):"Autologg av — du logger selv",null);
   });
 }
+function valgtTur(){
+  if(tur&&tur.punkter.length) return tur;
+  if(valgtTurId){ const t=state.turer.find(x=>x.id===valgtTurId); if(t) return t; }
+  return state.turer.length?state.turer[state.turer.length-1]:null;
+}
 function tegnKart(){
-  innhold.innerHTML='<h2>Kart</h2><div id="kart"></div><div class="notis">Gult spor: pågående eller siste tur. Markører: kunder med lagret posisjon.</div>';
+  const vt=valgtTur();
+  const beskrivelse=tur?"Pågående tur."
+    :vt?`Tur ${dagTittel(vt.start).toLowerCase()} ${klokke(vt.start)}–${klokke(vt.slutt)} · ${mFmt(vt.meter)}. Velg en annen tur under Logg.`
+    :"Ingen turer kjørt ennå.";
+  innhold.innerHTML='<h2>Kart</h2><div id="kart"></div><div class="notis">'+esc(beskrivelse)+' Markører: kunder med lagret posisjon.</div>';
   if(typeof L==="undefined"){ $("#kart").outerHTML='<div class="tom">Kartet trenger nett for å laste første gang.</div>'; return; }
   const medPos=state.kunder.filter(k=>k.lat!=null);
   let senter=[65.0,13.0], zoom=4;
   if(sistePos){ senter=[sistePos.lat,sistePos.lng]; zoom=13; }
+  else if(vt&&vt.punkter.length){ senter=[vt.punkter[0].lat,vt.punkter[0].lng]; zoom=14; }
   else if(medPos.length){ senter=[medPos[0].lat,medPos[0].lng]; zoom=12; }
   kartObj=L.map("kart").setView(senter,zoom);
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(kartObj);
@@ -536,11 +546,15 @@ function tegnKart(){
 }
 function oppdaterKartSpor(){
   if(!kartObj) return;
-  const kilde=tur&&tur.punkter.length?tur.punkter:(state.turer.length?state.turer[state.turer.length-1].punkter:[]);
+  const vt=valgtTur();
+  const kilde=vt?vt.punkter:[];
   if(!kilde||kilde.length<2) return;
   const pts=kilde.map(p=>[p.lat,p.lng]);
   if(sporLinje) sporLinje.setLatLngs(pts);
-  else sporLinje=L.polyline(pts,{color:"#f6a41d",weight:4}).addTo(kartObj);
+  else{
+    sporLinje=L.polyline(pts,{color:"#f6a41d",weight:4}).addTo(kartObj);
+    if(!tur) kartObj.fitBounds(sporLinje.getBounds(),{padding:[30,30]});
+  }
 }
 function tegnLogg(){
   const rader=[
@@ -564,6 +578,7 @@ function tegnLogg(){
       const kundenavn=t.jobbIder.map(id=>{const j=state.jobber.find(x=>x.id===id);return j?j.kundeNavn:null;}).filter(Boolean).join(", ");
       html+=`<div class="loggrad"><div class="hva">Tur <span class="type-pill type-tur">GPS</span><div class="under">${mFmt(t.meter)} · ${varighet(ms)} t · ${t.jobbIder.length} logget${kundenavn?": "+esc(kundenavn):""}</div></div>
         <div style="display:flex;gap:8px;align-items:center"><span class="tid">${klokke(t.start)}–${klokke(t.slutt)}</span>
+        ${t.punkter&&t.punkter.length>1?`<button class="btn-ghost" data-vistur="${t.id}">Kart</button>`:""}
         <button class="btn-ghost" data-sletttur="${t.id}" aria-label="Slett">✕</button></div></div>`;
     }
   }
@@ -800,6 +815,8 @@ document.addEventListener("click",e=>{
   }
   const sj=e.target.closest("[data-slettjobb]");
   if(sj){ state.jobber=state.jobber.filter(j=>j.id!==sj.dataset.slettjobb); lagre(); tegn(); return; }
+  const vt=e.target.closest("[data-vistur]");
+  if(vt){ valgtTurId=vt.dataset.vistur; location.hash="kart"; return; }
   const st=e.target.closest("[data-sletttur]");
   if(st){ state.turer=state.turer.filter(t=>t.id!==st.dataset.sletttur); lagre(); tegn(); return; }
   const sk=e.target.closest("[data-slettkunde]");
