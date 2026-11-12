@@ -309,7 +309,7 @@ function startTur(){
       if(!sisteListePos || haversine(sisteListePos,sistePos)>50){ sisteListePos={...sistePos}; tegn(); }
       else oppdaterTurpanel();
     }
-    if(gjeldendeFane()==="kart") oppdaterKartSpor();
+    if(gjeldendeFane()==="kart"){ oppdaterKartSpor(); navOppdater(); }
   },err=>{
     gpsOk=false;
     visToast(err.code===1?"Posisjon avslått. Gi stedstilgang i nettleseren for GPS-logg.":"Fikk ikke posisjon ("+err.message+")",null);
@@ -348,7 +348,7 @@ function gjeldendeFane(){ const h=(location.hash||"").replace("#",""); return FA
 function tegn(){
   const fane=gjeldendeFane();
   document.querySelectorAll("nav.tabs a").forEach(a=>a.classList.toggle("aktiv",a.dataset.fane===fane));
-  if(fane!=="kart" && kartObj){ tegning=null; kartObj.remove(); kartObj=null; sporLinje=null; kundeMarkorer=[]; anvisningLag=[]; }
+  if(fane!=="kart" && kartObj){ tegning=null; kartObj.remove(); kartObj=null; sporLinje=null; kundeMarkorer=[]; anvisningLag=[]; ruteLag=null; posMarkor=null; ruteHentetFra=null; ruteNesteId=null; ruteInfo=null; }
   if(fane==="broyt") tegnBroyt();
   else if(fane==="kart") tegnKart();
   else if(fane==="logg") tegnLogg();
@@ -579,7 +579,7 @@ function tegnKart(){
   const beskrivelse=tur?"Pågående tur."
     :vt?`Tur ${dagTittel(vt.start).toLowerCase()} ${klokke(vt.start)}–${klokke(vt.slutt)} · ${mFmt(vt.meter)}. Velg en annen tur under Logg.`
     :"Ingen turer kjørt ennå.";
-  innhold.innerHTML='<h2>Kart</h2><div id="kart"></div>'+
+  innhold.innerHTML='<h2>Kart</h2>'+(tur?'<div class="neste" id="nav-banner" style="margin:0 0 8px"></div>':"")+'<div id="kart"></div>'+
     '<div id="tegn-verktoy" hidden><div class="tegninfo" id="tegn-info"></div><div class="tegnbar">'+
     '<button class="btn-logg" id="tegn-ferdig" style="flex:0 1 auto">Lagre tegning</button>'+
     '<button class="btn-ghost" id="tegn-angre">Angre punkt</button>'+
@@ -612,7 +612,72 @@ function tegnKart(){
   }
   tegnAnvisninger();
   oppdaterKartSpor();
-  if(sistePos) L.circleMarker([sistePos.lat,sistePos.lng],{radius:7,color:"#f6a41d",fillOpacity:.9}).addTo(kartObj);
+  if(sistePos){
+    posMarkor=L.circleMarker([sistePos.lat,sistePos.lng],{radius:7,color:"#f6a41d",fillOpacity:.9}).addTo(kartObj);
+  }
+  // Kjøremodus: kartet følger deg under tur til brukeren drar i det selv
+  kartObj.on("dragstart",()=>{ folgModus=false; oppdaterNavBanner(); });
+  if(tur){
+    folgModus=true; ruteHentetFra=null; ruteNesteId=null;
+    if(sistePos){ kartObj.setView([sistePos.lat,sistePos.lng],Math.max(kartObj.getZoom(),15)); navOppdater(); }
+    oppdaterNavBanner();
+  }
+}
+/* ===== Kjøremodus: rute i appens eget kart, med anvisningene synlige =====
+   Ruting via OSRM (OpenStreetMap). Faller tilbake til luftlinje uten nett. */
+let posMarkor=null, ruteLag=null, ruteHentetFra=null, ruteNesteId=null, ruteInfo=null, ruteTimer=0;
+function oppdaterNavBanner(){
+  const b=$("#nav-banner"); if(!b) return;
+  const n=nesteKunde();
+  if(!n){ b.innerHTML="Alle kunder er tatt siste 12 timer ✓"; return; }
+  const avst=(sistePos&&n.lat!=null)?mFmt(haversine(sistePos,{lat:n.lat,lng:n.lng})):null;
+  const info=ruteInfo&&ruteNesteId===n.id
+    ? ` · ${mFmt(ruteInfo.meter)} · ca ${Math.max(1,Math.round(ruteInfo.sek/60))} min`
+    : (avst?` · ${avst} i luftlinje`:"");
+  b.innerHTML=`Neste: ${n.rekkefolge?`<span class="nr">${n.rekkefolge}</span>`:""}<b>${esc(n.navn)}</b>${info}`+
+    (folgModus?"":' <button class="btn-ghost" id="folg-knapp" style="padding:4px 10px">Følg meg</button>')+
+    (n.lat!=null?` <a href="https://www.google.com/maps/dir/?api=1&destination=${n.lat},${n.lng}" target="_blank" rel="noopener">Google Maps ↗</a>`:"");
+  const fk=$("#folg-knapp");
+  if(fk) fk.addEventListener("click",()=>{
+    folgModus=true;
+    if(sistePos&&kartObj) kartObj.setView([sistePos.lat,sistePos.lng],Math.max(kartObj.getZoom(),15));
+    oppdaterNavBanner();
+  });
+}
+async function hentRute(n){
+  if(!sistePos||n.lat==null) return;
+  ruteHentetFra={...sistePos}; ruteNesteId=n.id;
+  try{
+    const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${sistePos.lng},${sistePos.lat};${n.lng},${n.lat}?overview=full&geometries=geojson`);
+    if(!r.ok) throw new Error(r.status);
+    const j=await r.json();
+    const rute=j.routes&&j.routes[0];
+    if(!rute) throw new Error("ingen rute");
+    ruteInfo={meter:rute.distance, sek:rute.duration};
+    const pts=rute.geometry.coordinates.map(c=>[c[1],c[0]]);
+    if(ruteLag) ruteLag.setLatLngs(pts);
+    else if(kartObj) ruteLag=L.polyline(pts,{color:"#5b8def",weight:5,opacity:.85}).addTo(kartObj);
+  }catch{
+    // Luftlinje som reserve — bedre enn ingenting uten dekning
+    ruteInfo=null;
+    const pts=[[sistePos.lat,sistePos.lng],[n.lat,n.lng]];
+    if(ruteLag) ruteLag.setLatLngs(pts);
+    else if(kartObj) ruteLag=L.polyline(pts,{color:"#5b8def",weight:4,dashArray:"6 8",opacity:.7}).addTo(kartObj);
+  }
+  oppdaterNavBanner();
+}
+function navOppdater(){
+  if(!kartObj||!tur||!sistePos) return;
+  if(posMarkor) posMarkor.setLatLng([sistePos.lat,sistePos.lng]);
+  else posMarkor=L.circleMarker([sistePos.lat,sistePos.lng],{radius:7,color:"#f6a41d",fillOpacity:.9}).addTo(kartObj);
+  if(folgModus) kartObj.setView([sistePos.lat,sistePos.lng],Math.max(kartObj.getZoom(),15),{animate:false});
+  const n=nesteKunde();
+  if(!n||n.lat==null){ oppdaterNavBanner(); return; }
+  // Hent ny rute når målet byttes eller du har flyttet deg 250 m siden sist,
+  // men aldri oftere enn hvert 15. sekund (OSRMs demoserver skal ikke hamres)
+  const måHente=ruteNesteId!==n.id || !ruteHentetFra || haversine(ruteHentetFra,sistePos)>250;
+  if(måHente && Date.now()-ruteTimer>15000){ ruteTimer=Date.now(); hentRute(n); }
+  oppdaterNavBanner();
 }
 /* ===== Brøyteanvisninger: streker tegnet på kundens eiendom =====
    «Foran garasjen, ned mot huset, halvveis ned på høyre side» — tegnet én gang,
