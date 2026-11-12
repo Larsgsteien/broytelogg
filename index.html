@@ -756,6 +756,8 @@ function loggJobb(k,type,auto){
   const j={id:nyId(), kundeId:k.id, kundeNavn:k.navn, type, ts:new Date().toISOString()};
   if(sistePos){ j.lat=sistePos.lat; j.lng=sistePos.lng; }
   if(auto) j.auto=true;
+  // Enhver logg armerer nabosperren: står du og måker her, skal ikke naboen logges
+  if(sistePos) sisteAutoPos={lat:sistePos.lat,lng:sistePos.lng};
   state.jobber.push(j);
   if(tur) tur.jobbIder.push(j.id);
   sisteJobbId=j.id;
