@@ -1,0 +1,13 @@
+{
+  "name": "Brøytelogg",
+  "short_name": "Brøytelogg",
+  "description": "Logg brøyting med ett trykk — GPS sporer turen",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0c111c",
+  "theme_color": "#0c111c",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
