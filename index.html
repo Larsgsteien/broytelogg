@@ -184,7 +184,14 @@ function lesLager(){
       if(s&&Array.isArray(s.kunder)) state={kunder:s.kunder||[],jobber:s.jobber||[],turer:s.turer||[]};
     }
   }catch{}
-  fjernDemodata();
+  // Engangsrydding av eksempeldata fra tidlige versjoner. Flagget gjør at
+  // eksempeldata brukeren selv legger inn senere IKKE slettes ved neste åpning.
+  try{
+    if(!localStorage.getItem("broytelogg-demorydd")){
+      fjernDemodata();
+      localStorage.setItem("broytelogg-demorydd","1");
+    }
+  }catch{}
 }
 // Rydder bort eksempelkundene fra tidligere versjoner, med jobbene som hørte til
 function fjernDemodata(){
@@ -194,6 +201,23 @@ function fjernDemodata(){
   state.jobber=state.jobber.filter(j=>!demoIder.has(j.kundeId));
   const igjen=new Set(state.jobber.map(j=>j.id));
   state.turer=state.turer.map(t=>({...t, jobbIder:(t.jobbIder||[]).filter(id=>igjen.has(id))}));
+}
+// Eksempeldata man kan leke med før man legger inn egne kunder
+function leggInnEksempler(){
+  const nå=Date.now();
+  const eks=[
+    {id:"demo-"+nyId(),navn:"Nordmo Gård",adresse:"Nordmoveien 4, Setermoen",rode:"Setermoen",prismodell:"gang",pris:450,hindring:"Kumlokk ved porten — løft skjæret",lat:68.8607,lng:18.3489,aktiv:true,demo:true},
+    {id:"demo-"+nyId(),navn:"Sameiet Bjørkelia",adresse:"Bjørkelia 2–14",rode:"Setermoen",prismodell:"sesong",pris:18000,lat:68.8625,lng:18.3420,aktiv:true,demo:true},
+    {id:"demo-"+nyId(),navn:"Hansen",adresse:"Fjellveien 12",rode:"Setermoen",prismodell:"gang",pris:500,lat:68.8642,lng:18.3551,aktiv:true,demo:true}
+  ];
+  state.kunder.push(...eks);
+  state.jobber.push(
+    {id:nyId(),kundeId:eks[0].id,kundeNavn:eks[0].navn,type:"broyting",ts:new Date(nå-9*36e5).toISOString()},
+    {id:nyId(),kundeId:eks[2].id,kundeNavn:eks[2].navn,type:"broyting",ts:new Date(nå-32*36e5).toISOString()},
+    {id:nyId(),kundeId:eks[2].id,kundeNavn:eks[2].navn,type:"stroing",ts:new Date(nå-31.5*36e5).toISOString()}
+  );
+  lagre(); tegn();
+  visToast("Eksempeldata lagt inn — fjernes under Kunder",null);
 }
 function lagre(){ try{ localStorage.setItem(LAGER,JSON.stringify(state)); }catch(e){ visToast("Kunne ikke lagre lokalt: "+e.message,null); } }
 const nyId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
@@ -253,13 +277,15 @@ function startTur(){
     gpsOk=true;
     sisteFart=(p.coords.speed!=null && isFinite(p.coords.speed) && p.coords.speed>=0)?p.coords.speed:null;
     if(pos.acc<=60){
-      if(sistePos){
-        const d=haversine(sistePos,pos);
-        if(d>=8 && d<500){ tur&&(tur.meter+=d); }
+      if(tur){ // guard: en posisjon kan komme inn idet turen avsluttes
+        if(sistePos){
+          const d=haversine(sistePos,pos);
+          if(d>=8 && d<500) tur.meter+=d;
+        }
+        if(!tur.punkter.length || haversine(tur.punkter[tur.punkter.length-1],pos)>=20)
+          tur.punkter.push({lat:pos.lat,lng:pos.lng});
+        if(tur.punkter.length>4000) tur.punkter.splice(0,1000);
       }
-      if(!tur.punkter.length || haversine(tur.punkter[tur.punkter.length-1],pos)>=20)
-        tur.punkter.push({lat:pos.lat,lng:pos.lng});
-      if(tur.punkter.length>4000) tur.punkter.splice(0,1000);
       sistePos=pos;
     }
     if(gjeldendeFane()==="broyt") oppdaterTurpanel();
@@ -270,12 +296,21 @@ function startTur(){
     if(gjeldendeFane()==="broyt") oppdaterTurpanel();
   },{enableHighAccuracy:true, maximumAge:3000, timeout:20000});
   tickTimer=setInterval(()=>{ if(gjeldendeFane()==="broyt") oppdaterTurpanel(); },30000);
-  try{ navigator.wakeLock&&navigator.wakeLock.request("screen").catch(()=>{}); }catch{}
+  holdSkjermVaaken();
   tegn();
 }
+let wakeLock=null;
+async function holdSkjermVaaken(){
+  try{ if(navigator.wakeLock) wakeLock=await navigator.wakeLock.request("screen"); }catch{}
+}
+// Wake lock slippes av nettleseren når appen går i bakgrunnen — ta den tilbake
+document.addEventListener("visibilitychange",()=>{
+  if(tur && document.visibilityState==="visible") holdSkjermVaaken();
+});
 function stoppTur(){
   if(watchId!=null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
   clearInterval(tickTimer);
+  try{ wakeLock&&wakeLock.release(); }catch{} wakeLock=null;
   if(tur){
     tur.slutt=new Date().toISOString();
     if(tur.meter>30 || tur.jobbIder.length){ state.turer.push(tur); lagre(); visToast("Tur lagret: "+mFmt(tur.meter)+" på "+varighet(new Date(tur.slutt)-new Date(tur.start))+" t",null); }
@@ -330,7 +365,7 @@ function naervarselHtml(){
     <div class="under">${mFmt(n.d)} unna</div>
     ${n.k.hindring?`<div class="hindring">⚠ ${esc(n.k.hindring)}</div>`:""}
     <div class="btnrow"><button class="btn-logg" data-logg="${n.k.id}" data-type="broyting">Brøytet nå</button>
-    <button class="btn-sek" data-logg="${n.k.id}" data-type="stroing">Strødd</button>
+    <button class="btn-sek" data-logg="${n.k.id}" data-type="stroing">Strødd nå</button>
     <button class="btn-ghost" data-avvis="${n.k.id}" style="flex:0 1 auto">Ikke nå</button></div></div>`;
 }
 function turpanelHtml(){
@@ -362,7 +397,7 @@ function kundekort({k,sist,avstand}){
     <div class="kunde-head">
       <div style="min-width:0">
         <div class="kunde-navn">${esc(k.navn)}${k.demo?' <span class="badge">Eksempel</span>':""}</div>
-        <div class="kunde-adr">${esc(k.adresse||"")}</div>
+        <div class="kunde-adr">${esc(k.adresse||"")}${k.rode?" · "+esc(k.rode):""}</div>
         <div class="sist">Sist: <span class="${fersk?"fersk":""}">${t}</span>${avstand!=null?` · <span class="avstand">${mFmt(avstand)} unna</span>`:""}</div>
         ${k.hindring?`<div class="hindring">⚠ ${esc(k.hindring)}</div>`:""}
       </div>
@@ -375,7 +410,7 @@ function kundekort({k,sist,avstand}){
 }
 function tegnBroyt(){
   if(state.kunder.length===0){
-    innhold.innerHTML=turpanelHtml()+'<div class="tom"><b>Ingen kunder ennå.</b><br>Legg inn innkjørslene du brøyter, så logger du hver tur med ett trykk.<div class="btnrow" style="justify-content:center"><button class="btn-sek" style="flex:0 1 auto" onclick="location.hash=\'kunder\'">Legg til kunde</button></div></div>';
+    innhold.innerHTML=turpanelHtml()+'<div class="tom"><b>Ingen kunder ennå.</b><br>Legg inn innkjørslene du brøyter, så logger du hver tur med ett trykk.<div class="btnrow" style="justify-content:center"><button class="btn-sek" style="flex:0 1 auto" onclick="location.hash=\'kunder\'">Legg til kunde</button><button class="btn-ghost" id="demo-knapp" style="flex:0 1 auto">Prøv med eksempeldata</button></div></div>';
     kobleTurknapper(); return;
   }
   const aktive=state.kunder.filter(k=>k.aktiv!==false).map(k=>({
@@ -623,11 +658,21 @@ function tegnOversikt(){
     rader.map(r=>`<tr><td>${esc(r.navn)}${r.rode?'<div class="under">'+esc(r.rode)+"</div>":""}</td><td class="num">${r.br}</td><td class="num">${r.st}</td><td class="num">${nok(r.inntekt)}</td></tr>`).join("")+
     `<tr class="sumlinje"><td>Sum</td><td class="num">${sum.br}</td><td class="num">${sum.st}</td><td class="num">${nok(sum.inntekt)}</td></tr>`+
     '</tbody></table></div>'+
-    '<div class="btnrow"><button class="btn-sek" id="last-csv" style="flex:0 1 auto">Last ned CSV</button></div>'+
+    '<div class="btnrow"><button class="btn-sek" id="last-csv" style="flex:0 1 auto">Last ned CSV</button>'+
+    '<button class="btn-sek" id="del-sammendrag" style="flex:0 1 auto">Del sammendrag</button></div>'+
     '<div class="notis">Estimatet bruker kundens prismodell: fastpris telles én gang per sesong (ikke i 30-dagersvisningen), per-gang ganges med antall turer. Grunnlag for fakturering, ikke regnskap.</div>';
   $("#periode").addEventListener("change",e=>{ periodeValg=e.target.value; tegn(); });
+  const periodenavn=periodeValg==="30d"?"siste 30 dager":"sesongen";
+  $("#del-sammendrag").addEventListener("click",async ()=>{
+    const linjer=rader.filter(r=>r.br+r.st>0 || r.inntekt>0).map(r=>`${r.navn}: ${r.br} brøyt, ${r.st} strø — ${nok(r.inntekt)}`);
+    const tekst=`Brøytelogg, ${periodenavn}:\n`+(linjer.length?linjer.join("\n"):"Ingen turer logget.")+`\nSum: ${sum.br} brøyt, ${sum.st} strø — ${nok(sum.inntekt)}`;
+    if(navigator.share){ try{ await navigator.share({text:tekst}); return; }catch{} }
+    try{ await navigator.clipboard.writeText(tekst); visToast("Sammendrag kopiert — lim inn i melding eller e-post",null); }
+    catch{ visToast("Kunne ikke dele på denne enheten.",null); }
+  });
+  const csvFelt=s=>'"'+String(s??"").replace(/"/g,'""')+'"';
   $("#last-csv").addEventListener("click",()=>{
-    const csv=["Kunde;Rode;Brøytinger;Strøinger;Estimat kr"].concat(rader.map(r=>`${r.navn};${r.rode};${r.br};${r.st};${r.inntekt}`)).join("\n");
+    const csv=["Kunde;Rode;Brøytinger;Strøinger;Estimat kr"].concat(rader.map(r=>[csvFelt(r.navn),csvFelt(r.rode),r.br,r.st,r.inntekt].join(";"))).join("\n");
     const blob=new Blob(["﻿"+csv],{type:"text/csv;charset=utf-8"});
     const a=document.createElement("a");
     a.href=URL.createObjectURL(blob);
