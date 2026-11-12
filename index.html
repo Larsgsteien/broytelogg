@@ -372,7 +372,10 @@ function naerKunde(){
 // naboen Jensen 35 m unna bli logget også. Du må flytte deg først.
 function autologgSperret(){
   if(!sisteAutoPos||!sistePos) return false;
-  return haversine(sistePos,sisteAutoPos)<FLYTT_ETTER_AUTO;
+  // Har du først kommet deg unna, oppheves sperren for godt — ellers ville en nabo
+  // innenfor 60 m aldri kunne autologges, heller ikke når du kommer tilbake senere
+  if(haversine(sistePos,sisteAutoPos)>=FLYTT_ETTER_AUTO){ sisteAutoPos=null; return false; }
+  return true;
 }
 // Kalles ved hver GPS-oppdatering: holder styr på hvor lenge du har stått ved kunden
 function vurderNaerhet(){
