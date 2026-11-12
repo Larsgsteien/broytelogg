@@ -114,6 +114,17 @@ input:focus,select:focus,button:focus-visible,a:focus-visible{outline:2px solid 
 .bryter{flex-direction:row; align-items:center; gap:9px; margin-top:12px; text-transform:none;
   letter-spacing:0; font-size:13px; color:var(--fg); cursor:pointer}
 .bryter input{width:auto; accent-color:var(--accent); flex:0 0 auto; width:20px; height:20px}
+.nr{display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:22px;
+  border-radius:999px; background:var(--accent); color:var(--accent-fg); font-size:13px; font-weight:700;
+  margin-right:7px; padding:0 5px; vertical-align:text-bottom}
+.card.ferdig{opacity:.62}
+.neste{margin-top:10px; padding:10px 12px; background:var(--surface2); border:1px solid var(--line); border-radius:10px; font-size:14px}
+.neste a{color:var(--accent); font-weight:700; text-decoration:none; white-space:nowrap; margin-left:8px}
+.sortvalg{display:flex; align-items:center; gap:8px; margin:14px 0 2px; font-size:13px; color:var(--muted)}
+.sortvalg select{width:auto; padding:6px 10px}
+.tegnbar{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px}
+.tegnbar button{font-size:13px; padding:8px 10px}
+.tegninfo{font-size:13px; color:var(--accent); margin-top:6px}
 .loggdag{color:var(--muted); font-size:12px; letter-spacing:.08em; text-transform:uppercase; margin:16px 0 6px}
 .loggrad{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 12px; background:var(--surface); border:1px solid var(--line); border-radius:10px; margin-bottom:6px}
 .loggrad .hva{min-width:0}
@@ -332,7 +343,7 @@ function gjeldendeFane(){ const h=(location.hash||"").replace("#",""); return FA
 function tegn(){
   const fane=gjeldendeFane();
   document.querySelectorAll("nav.tabs a").forEach(a=>a.classList.toggle("aktiv",a.dataset.fane===fane));
-  if(fane!=="kart" && kartObj){ kartObj.remove(); kartObj=null; sporLinje=null; kundeMarkorer=[]; }
+  if(fane!=="kart" && kartObj){ tegning=null; kartObj.remove(); kartObj=null; sporLinje=null; kundeMarkorer=[]; anvisningLag=[]; }
   if(fane==="broyt") tegnBroyt();
   else if(fane==="kart") tegnKart();
   else if(fane==="logg") tegnLogg();
@@ -353,7 +364,7 @@ function sisteJobbFor(kid){
 const NAER_RADIUS=100, AUTO_RADIUS=40, FORLAT_RADIUS=70, AUTO_SEK=15;
 const KJORE_FART=2.5;      // m/s (9 km/t) — over dette regnes du som kjørende, ikke arbeidende
 const FLYTT_ETTER_AUTO=60; // m du må flytte deg før neste autologg kan skje
-let naerSiden=null, naerId=null, varselSignatur=null, sisteAutoPos=null;
+let naerSiden=null, naerId=null, varselSignatur=null, sisteAutoPos=null, sorterEtter="rute";
 const autologgPa=()=>state.innstillinger?state.innstillinger.autologg!==false:true;
 
 function naerKunde(){
@@ -418,6 +429,25 @@ function naervarselHtml(){
     <button class="btn-sek" data-logg="${n.k.id}" data-type="stroing">Strødd nå</button>
     <button class="btn-ghost" data-avvis="${n.k.id}" style="flex:0 1 auto">Ikke nå</button></div></div>`;
 }
+// Neste kunde i ruta: lavest rutenummer som ikke er tatt siste 12 t
+function nesteKunde(){
+  const kand=state.kunder.filter(k=>k.aktiv!==false)
+    .map(k=>({k,sist:sisteJobbFor(k.id)}))
+    .filter(x=>!(x.sist&&(Date.now()-new Date(x.sist.ts))<12*3600e3));
+  if(!kand.length) return null;
+  kand.sort((a,b)=>(a.k.rekkefolge||1e9)-(b.k.rekkefolge||1e9)
+    || ((a.sist?a.sist.ts:"")<(b.sist?b.sist.ts:"")?-1:1));
+  return kand[0].k;
+}
+function nesteLinjeHtml(){
+  const n=nesteKunde();
+  if(!n) return '<div class="neste">Alle kunder er tatt siste 12 timer ✓</div>';
+  const avst=(sistePos&&n.lat!=null)?` · <span id="neste-avstand">${mFmt(haversine(sistePos,{lat:n.lat,lng:n.lng}))}</span>`:"";
+  const nav=n.lat!=null
+    ?`<a href="https://www.google.com/maps/dir/?api=1&destination=${n.lat},${n.lng}" target="_blank" rel="noopener">Veibeskrivelse ↗</a>`
+    :"";
+  return `<div class="neste">Neste: ${n.rekkefolge?`<span class="nr">${n.rekkefolge}</span>`:""}<b>${esc(n.navn)}</b>${avst}${nav}</div>`;
+}
 function turpanelHtml(){
   if(!tur) return `<div class="turpanel"><div class="gps-status">Turmodus: GPS logger tid og kjørt distanse automatisk.</div>
     <div class="btnrow" style="margin-top:10px"><button class="btn-logg" id="start-tur">Start tur</button></div></div>`;
@@ -428,6 +458,7 @@ function turpanelHtml(){
       <div><div class="tall" id="tur-tid">${varighet(ms)}</div><div class="navn">Tid (t:min)</div></div>
       <div><div class="tall">${tur.jobbIder.length}</div><div class="navn">Logget</div></div>
     </div>
+    ${nesteLinjeHtml()}
     <div id="naervarsel">${naervarselHtml()}</div>
     <label class="bryter"><input type="checkbox" id="autologg" ${autologgPa()?"checked":""}> Autologg når jeg stopper ved en kunde</label>
     <div class="btnrow" style="margin-top:8px"><button class="btn-sek" id="stopp-tur" style="border-color:var(--danger);color:var(--danger)">Avslutt tur</button></div></div>`;
@@ -439,6 +470,11 @@ function oppdaterTurpanel(){
   if(tid) tid.textContent=varighet(Date.now()-new Date(tur.start));
   const st=document.querySelector(".turpanel .gps-status");
   if(st){ st.className="gps-status"+(gpsOk?" god":""); st.innerHTML=gpsStatusTekst(); }
+  const na=$("#neste-avstand");
+  if(na&&sistePos){
+    const n=nesteKunde();
+    if(n&&n.lat!=null) na.textContent=mFmt(haversine(sistePos,{lat:n.lat,lng:n.lng}));
+  }
   // Bytt ut hele kortet bare når noe endrer seg — ellers ville knappene
   // forsvunnet under fingeren hvert sekund mens nedtellingen går
   const nv=$("#naervarsel");
@@ -455,10 +491,10 @@ function oppdaterTurpanel(){
 function kundekort({k,sist,avstand}){
   const t=sist?relTid(sist.ts):"aldri logget";
   const fersk=sist && (Date.now()-new Date(sist.ts))<12*3600e3;
-  return `<div class="card">
+  return `<div class="card${fersk?" ferdig":""}">
     <div class="kunde-head">
       <div style="min-width:0">
-        <div class="kunde-navn">${esc(k.navn)}${k.demo?' <span class="badge">Eksempel</span>':""}</div>
+        <div class="kunde-navn">${k.rekkefolge?`<span class="nr">${k.rekkefolge}</span>`:""}${esc(k.navn)}${k.demo?' <span class="badge">Eksempel</span>':""}</div>
         <div class="kunde-adr">${esc(k.adresse||"")}${k.rode?" · "+esc(k.rode):""}</div>
         <div class="sist">Sist: <span class="${fersk?"fersk":""}">${t}</span>${avstand!=null?` · <span class="avstand">${mFmt(avstand)} unna</span>`:""}</div>
         ${k.hindring?`<div class="hindring">⚠ ${esc(k.hindring)}</div>`:""}
@@ -479,13 +515,21 @@ function tegnBroyt(){
     k, sist:sisteJobbFor(k.id),
     avstand:(sistePos&&k.lat!=null)?haversine(sistePos,{lat:k.lat,lng:k.lng}):null
   }));
+  // Rutesortering: nummer først (1, 2, 3 …), unummererte etterpå på ventetid
+  const ruteSort=(a,b)=>(a.k.rekkefolge||1e9)-(b.k.rekkefolge||1e9)
+    || ((a.sist?a.sist.ts:"")<(b.sist?b.sist.ts:"")?-1:1);
   let html=turpanelHtml();
   if(sistePos){
-    // GPS aktiv: flat liste sortert etter avstand — nærmeste øverst
-    const liste=[...aktive].sort((a,b)=>(a.avstand??1e12)-(b.avstand??1e12));
-    html+='<h2>Nærmest deg</h2><div class="cardlist">'+liste.map(kundekort).join("")+"</div>";
+    html+=`<div class="sortvalg">Sorter <select id="sorter">
+      <option value="rute"${sorterEtter==="rute"?" selected":""}>Etter rekkefølge i ruta</option>
+      <option value="naermest"${sorterEtter==="naermest"?" selected":""}>Nærmest meg nå</option>
+    </select></div>`;
+    const liste=[...aktive].sort(sorterEtter==="naermest"
+      ? (a,b)=>(a.avstand??1e12)-(b.avstand??1e12)
+      : ruteSort);
+    html+='<div class="cardlist" style="margin-top:10px">'+liste.map(kundekort).join("")+"</div>";
   }else{
-    // Uten GPS: grupper per rode, lengst ventetid først
+    // Uten GPS: grupper per rode, rutenummer først, deretter lengst ventetid
     const grupper=new Map();
     for(const el of aktive){
       const nøkkel=(el.k.rode||"").trim()||"Uten rode";
@@ -495,7 +539,7 @@ function tegnBroyt(){
     const navn=[...grupper.keys()].sort((a,b)=>a==="Uten rode"?1:b==="Uten rode"?-1:a.localeCompare(b,"nb"));
     html+='<h2>Logg en tur</h2>';
     for(const n of navn){
-      const liste=grupper.get(n).sort((a,b)=>(a.sist?a.sist.ts:"")<(b.sist?b.sist.ts:"")?-1:1);
+      const liste=grupper.get(n).sort(ruteSort);
       const ferdige=liste.filter(x=>x.sist && (Date.now()-new Date(x.sist.ts))<12*3600e3).length;
       const pct=Math.round(100*ferdige/liste.length);
       html+=`<div class="rode-head"><div class="rode-navn">${esc(n)}</div><div class="rode-telling">${ferdige} av ${liste.length} siste 12 t</div></div>
@@ -505,6 +549,8 @@ function tegnBroyt(){
   }
   innhold.innerHTML=html;
   kobleTurknapper();
+  const sorter=$("#sorter");
+  if(sorter) sorter.addEventListener("change",()=>{ sorterEtter=sorter.value; tegn(); });
 }
 function kobleTurknapper(){
   const s=$("#start-tur"); if(s) s.addEventListener("click",startTur);
@@ -528,7 +574,14 @@ function tegnKart(){
   const beskrivelse=tur?"Pågående tur."
     :vt?`Tur ${dagTittel(vt.start).toLowerCase()} ${klokke(vt.start)}–${klokke(vt.slutt)} · ${mFmt(vt.meter)}. Velg en annen tur under Logg.`
     :"Ingen turer kjørt ennå.";
-  innhold.innerHTML='<h2>Kart</h2><div id="kart"></div><div class="notis">'+esc(beskrivelse)+' Markører: kunder med lagret posisjon.</div>';
+  innhold.innerHTML='<h2>Kart</h2><div id="kart"></div>'+
+    '<div id="tegn-verktoy" hidden><div class="tegninfo" id="tegn-info"></div><div class="tegnbar">'+
+    '<button class="btn-logg" id="tegn-ferdig" style="flex:0 1 auto">Lagre tegning</button>'+
+    '<button class="btn-ghost" id="tegn-angre">Angre punkt</button>'+
+    '<button class="btn-ghost" id="tegn-ny">Ny strek</button>'+
+    '<button class="btn-danger" id="tegn-slett">Slett alt</button>'+
+    '<button class="btn-ghost" id="tegn-avbryt">Avbryt</button></div></div>'+
+    '<div class="notis">'+esc(beskrivelse)+' Flyfoto og detaljkart ligger i lagvelgeren oppe til høyre. Trykk på en kundemarkør for å tegne brøyteanvisning.</div>';
   if(typeof L==="undefined"){ $("#kart").outerHTML='<div class="tom">Kartet trenger nett for å laste første gang.</div>'; return; }
   const medPos=state.kunder.filter(k=>k.lat!=null);
   let senter=[65.0,13.0], zoom=4;
@@ -536,13 +589,85 @@ function tegnKart(){
   else if(vt&&vt.punkter.length){ senter=[vt.punkter[0].lat,vt.punkter[0].lng]; zoom=14; }
   else if(medPos.length){ senter=[medPos[0].lat,medPos[0].lng]; zoom=12; }
   kartObj=L.map("kart").setView(senter,zoom);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(kartObj);
+  const lagOSM=L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"});
+  const lagTopo=L.tileLayer("https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/{z}/{y}/{x}.png",{maxZoom:19,attribution:"© Kartverket"});
+  const lagFoto=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{maxZoom:19,attribution:"© Esri"});
+  (state.innstillinger&&state.innstillinger.kartlag==="foto"?lagFoto
+   :state.innstillinger&&state.innstillinger.kartlag==="topo"?lagTopo:lagOSM).addTo(kartObj);
+  L.control.layers({"Veikart (OSM)":lagOSM,"Norgeskart (Kartverket)":lagTopo,"Flyfoto":lagFoto}).addTo(kartObj);
+  kartObj.on("baselayerchange",e=>{
+    const valg=e.name==="Flyfoto"?"foto":e.name.startsWith("Norgeskart")?"topo":"osm";
+    state.innstillinger={...(state.innstillinger||{}), kartlag:valg}; lagre();
+  });
   for(const k of medPos){
-    const m=L.marker([k.lat,k.lng]).addTo(kartObj).bindPopup("<b>"+esc(k.navn)+"</b><br>"+esc(k.adresse||"")+(k.hindring?"<br>⚠ "+esc(k.hindring):""));
+    const m=L.marker([k.lat,k.lng]).addTo(kartObj).bindPopup(
+      "<b>"+esc(k.navn)+"</b><br>"+esc(k.adresse||"")+(k.hindring?"<br>⚠ "+esc(k.hindring):"")+
+      '<br><button onclick="startTegning(\''+k.id+'\')" style="margin-top:6px">✏ Tegn brøyteanvisning</button>');
     kundeMarkorer.push(m);
   }
+  tegnAnvisninger();
   oppdaterKartSpor();
   if(sistePos) L.circleMarker([sistePos.lat,sistePos.lng],{radius:7,color:"#f6a41d",fillOpacity:.9}).addTo(kartObj);
+}
+/* ===== Brøyteanvisninger: streker tegnet på kundens eiendom =====
+   «Foran garasjen, ned mot huset, halvveis ned på høyre side» — tegnet én gang,
+   så vikaren ser nøyaktig hva som skal tas. Lagres på kunden. */
+let tegning=null, anvisningLag=[];
+function tegnAnvisninger(){
+  for(const l of anvisningLag) l.remove();
+  anvisningLag=[];
+  if(!kartObj) return;
+  for(const k of state.kunder){
+    if(!k.tegninger||!k.tegninger.length) continue;
+    for(const linje of k.tegninger){
+      if(linje.length<2) continue;
+      anvisningLag.push(L.polyline(linje.map(p=>[p.lat,p.lng]),
+        {color:"#4fc27a",weight:5,opacity:.9,dashArray:"1 9",lineCap:"round"}).addTo(kartObj));
+    }
+  }
+}
+function startTegning(kundeId){
+  const k=state.kunder.find(x=>x.id===kundeId);
+  if(!k||!kartObj) return;
+  kartObj.closePopup();
+  tegning={kundeId, linjer:(k.tegninger||[]).map(l=>l.map(p=>({...p}))), akt:[], lag:[]};
+  kartObj.setView([k.lat,k.lng],Math.max(kartObj.getZoom(),18));
+  $("#tegn-verktoy").hidden=false;
+  $("#tegn-info").textContent="Tegner for "+k.navn+": trykk i kartet der skjæret skal gå. «Ny strek» for neste felt.";
+  kartObj.on("click",tegnKlikk);
+  tegnMidlertidig();
+}
+function tegnKlikk(e){
+  if(!tegning) return;
+  tegning.akt.push({lat:e.latlng.lat,lng:e.latlng.lng});
+  tegnMidlertidig();
+}
+function tegnMidlertidig(){
+  if(!tegning||!kartObj) return;
+  for(const l of tegning.lag) l.remove();
+  tegning.lag=[];
+  const alle=[...tegning.linjer, tegning.akt];
+  for(const linje of alle){
+    if(linje.length>=2) tegning.lag.push(L.polyline(linje.map(p=>[p.lat,p.lng]),{color:"#f6a41d",weight:5}).addTo(kartObj));
+    for(const p of linje) tegning.lag.push(L.circleMarker([p.lat,p.lng],{radius:4,color:"#f6a41d",fillOpacity:1}).addTo(kartObj));
+  }
+}
+function avsluttTegning(lagreDet){
+  if(!tegning) return;
+  if(lagreDet){
+    const k=state.kunder.find(x=>x.id===tegning.kundeId);
+    if(k){
+      const linjer=[...tegning.linjer, tegning.akt].filter(l=>l.length>=2);
+      k.tegninger=linjer;
+      lagre();
+      visToast(linjer.length?("Tegning lagret for "+k.navn):("Tegning fjernet for "+k.navn),null);
+    }
+  }
+  for(const l of tegning.lag) l.remove();
+  kartObj&&kartObj.off("click",tegnKlikk);
+  tegning=null;
+  const tv=$("#tegn-verktoy"); if(tv) tv.hidden=true;
+  tegnAnvisninger();
 }
 function oppdaterKartSpor(){
   if(!kartObj) return;
@@ -644,6 +769,7 @@ function tegnKunder(){
     `<label>Rode / rute<input id="f-rode" maxlength="60" list="rodeliste" placeholder="Setermoen sentrum" value="${red?esc(red.rode||""):""}"></label>`+
     `<label>Prismodell<select id="f-modell"><option value="gang"${red&&red.prismodell==="sesong"?"":" selected"}>Pris per gang</option><option value="sesong"${red&&red.prismodell==="sesong"?" selected":""}>Fastpris sesong</option></select></label>`+
     '</div><div class="to-kol">'+
+    `<label>Rekkefølge i ruta<input id="f-rekkefolge" type="number" min="1" step="1" placeholder="1 = først" value="${red&&red.rekkefolge?red.rekkefolge:""}"></label>`+
     `<label>Pris (kr)<input id="f-pris" type="number" min="0" step="50" placeholder="500" value="${red&&red.pris?red.pris:""}"></label>`+
     `<label>Hindring / merknad<input id="f-hindring" maxlength="120" placeholder="Kumlokk ved porten" value="${red?esc(red.hindring||""):""}"></label>`+
     '</div>'+
@@ -680,7 +806,8 @@ function tegnKunder(){
     e.preventDefault();
     const navn=$("#f-navn").value.trim(); if(!navn) return;
     const felt={navn, adresse:$("#f-adresse").value.trim(), rode:$("#f-rode").value.trim(),
-      hindring:$("#f-hindring").value.trim(), prismodell:$("#f-modell").value, pris:Number($("#f-pris").value)||0};
+      hindring:$("#f-hindring").value.trim(), prismodell:$("#f-modell").value, pris:Number($("#f-pris").value)||0,
+      rekkefolge:Number($("#f-rekkefolge").value)||null};
     // Posisjon fra adressesøket. Uten valgt treff beholdes kundens eksisterende posisjon.
     if(adrPos){ felt.lat=adrPos.lat; felt.lng=adrPos.lng; }
     if(redigerId){
@@ -817,6 +944,18 @@ document.addEventListener("click",e=>{
   if(sj){ state.jobber=state.jobber.filter(j=>j.id!==sj.dataset.slettjobb); lagre(); tegn(); return; }
   const vt=e.target.closest("[data-vistur]");
   if(vt){ valgtTurId=vt.dataset.vistur; location.hash="kart"; return; }
+  if(e.target.id==="tegn-ferdig"){ avsluttTegning(true); return; }
+  if(e.target.id==="tegn-avbryt"){ avsluttTegning(false); return; }
+  if(e.target.id==="tegn-angre" && tegning){
+    if(tegning.akt.length) tegning.akt.pop();
+    else if(tegning.linjer.length){ tegning.akt=tegning.linjer.pop(); tegning.akt.pop(); }
+    tegnMidlertidig(); return;
+  }
+  if(e.target.id==="tegn-ny" && tegning){
+    if(tegning.akt.length>=2) tegning.linjer.push(tegning.akt);
+    tegning.akt=[]; tegnMidlertidig(); return;
+  }
+  if(e.target.id==="tegn-slett" && tegning){ tegning.linjer=[]; tegning.akt=[]; tegnMidlertidig(); return; }
   const st=e.target.closest("[data-sletttur]");
   if(st){ state.turer=state.turer.filter(t=>t.id!==st.dataset.sletttur); lagre(); tegn(); return; }
   const sk=e.target.closest("[data-slettkunde]");
