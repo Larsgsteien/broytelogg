@@ -167,25 +167,27 @@ table.stat td.num,table.stat th.num{text-align:right}
 "use strict";
 /* ================= lagring (localStorage, med eksport/backup) ================= */
 const LAGER="broytelogg-v1";
+// Forslag i rode-feltet, også før du har opprettet noen roder selv
+const STANDARD_RODER=["Setermoen"];
 let state={kunder:[],jobber:[],turer:[]};
 function lesLager(){
   try{
     const raw=localStorage.getItem(LAGER);
-    if(raw){ const s=JSON.parse(raw); if(s&&Array.isArray(s.kunder)) state={kunder:s.kunder||[],jobber:s.jobber||[],turer:s.turer||[]}; return; }
+    if(raw){
+      const s=JSON.parse(raw);
+      if(s&&Array.isArray(s.kunder)) state={kunder:s.kunder||[],jobber:s.jobber||[],turer:s.turer||[]};
+    }
   }catch{}
-  // Førstegangsbesøk: eksempeldata (merket), så appen viser hva den gjør
-  state={
-    kunder:[
-      {id:"k1",navn:"Nordmo Gård",adresse:"Nordmoveien 4, Setermoen",rode:"Setermoen",prismodell:"gang",pris:450,hindring:"Kumlokk ved porten — løft skjæret",lat:68.8607,lng:18.3489,aktiv:true,demo:true},
-      {id:"k2",navn:"Sameiet Bjørkelia",adresse:"Bjørkelia 2–14, Løkken Verk",rode:"Løkken Verk",prismodell:"sesong",pris:18000,lat:63.1236,lng:9.9374,aktiv:true,demo:true},
-      {id:"k3",navn:"Hansen",adresse:"Fjellveien 12",rode:"Setermoen",prismodell:"gang",pris:500,lat:68.8642,lng:18.3551,aktiv:true,demo:true}
-    ],
-    jobber:[
-      {id:"j1",kundeId:"k1",kundeNavn:"Nordmo Gård",type:"broyting",ts:new Date(Date.now()-9*3600e3).toISOString()},
-      {id:"j2",kundeId:"k3",kundeNavn:"Hansen",type:"broyting",ts:new Date(Date.now()-32*3600e3).toISOString()}
-    ],
-    turer:[]
-  };
+  fjernDemodata();
+}
+// Rydder bort eksempelkundene fra tidligere versjoner, med jobbene som hørte til
+function fjernDemodata(){
+  const demoIder=new Set(state.kunder.filter(k=>k.demo).map(k=>k.id));
+  if(!demoIder.size) return;
+  state.kunder=state.kunder.filter(k=>!k.demo);
+  state.jobber=state.jobber.filter(j=>!demoIder.has(j.kundeId));
+  const igjen=new Set(state.jobber.map(j=>j.id));
+  state.turer=state.turer.map(t=>({...t, jobbIder:(t.jobbIder||[]).filter(id=>igjen.has(id))}));
 }
 function lagre(){ try{ localStorage.setItem(LAGER,JSON.stringify(state)); }catch(e){ visToast("Kunne ikke lagre lokalt: "+e.message,null); } }
 const nyId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
@@ -450,7 +452,7 @@ function tegnLogg(){
   innhold.innerHTML=html;
 }
 function tegnKunder(){
-  const roder=[...new Set(state.kunder.map(k=>(k.rode||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"nb"));
+  const roder=[...new Set([...state.kunder.map(k=>(k.rode||"").trim()).filter(Boolean), ...STANDARD_RODER])].sort((a,b)=>a.localeCompare(b,"nb"));
   const red=redigerId?state.kunder.find(k=>k.id===redigerId):null;
   let html=`<h2>${red?"Endre kunde":"Ny kunde"}</h2><div class="card"><form class="skjema" id="kundeskjema">`+
     `<label>Navn<input id="f-navn" required maxlength="80" placeholder="Hansen, Fjellveien 12" value="${red?esc(red.navn):""}"></label>`+
@@ -529,6 +531,10 @@ function tegnKunder(){
   });
 }
 function tegnOversikt(){
+  if(!state.kunder.length){
+    innhold.innerHTML='<h2>Fakturagrunnlag</h2><div class="tom"><b>Ingen kunder ennå.</b><br>Når du har lagt inn kunder og logget turer, får du antall brøytinger og estimert beløp per kunde her.<div class="btnrow" style="justify-content:center"><button class="btn-sek" style="flex:0 1 auto" onclick="location.hash=\'kunder\'">Legg til kunde</button></div></div>';
+    return;
+  }
   const fra=periodeValg==="30d"?new Date(Date.now()-30*864e5).toISOString():sesongStart();
   const rader=state.kunder.map(k=>{
     const mine=state.jobber.filter(j=>j.kundeId===k.id && j.ts>=fra);
