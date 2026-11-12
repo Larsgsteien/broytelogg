@@ -1,6 +1,6 @@
-// Enkel offline-støtte: app-skallet og kartbiblioteket caches,
-// karttiles hentes fra nett (cache-first ville fylt lageret).
-const CACHE = "broytelogg-v1";
+// Offline-støtte. HTML hentes nettverk-først (så oppdateringer når ut),
+// cache brukes som reserve uten dekning. CDN-ressurser caches etter bruk.
+const CACHE = "broytelogg-v2";
 const SKALL = ["./", "./index.html", "./manifest.json", "./icon.svg"];
 
 self.addEventListener("install", e => {
@@ -15,15 +15,31 @@ self.addEventListener("activate", e => {
 self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
-  if (url.hostname === "tile.openstreetmap.org") return; // alltid nett
-  // cache-first for eget skall + CDN (leaflet, fonter)
-  e.respondWith(
-    caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
-      if (res.ok && (url.origin === location.origin || url.hostname === "unpkg.com" || url.hostname.endsWith("gstatic.com") || url.hostname.endsWith("googleapis.com"))) {
-        const kopi = res.clone();
-        caches.open(CACHE).then(c => c.put(e.request, kopi));
-      }
-      return res;
-    }).catch(() => caches.match("./index.html")))
-  );
+  if (url.hostname === "tile.openstreetmap.org") return; // alltid nett, aldri cache
+
+  // Sidenavigasjon og eget skall: nettverk først, cache som reserve
+  if (e.request.mode === "navigate" || url.origin === location.origin) {
+    e.respondWith(
+      fetch(e.request).then(res => {
+        if (res.ok) {
+          const kopi = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, kopi));
+        }
+        return res;
+      }).catch(() => caches.match(e.request).then(hit => hit || caches.match("./index.html")))
+    );
+    return;
+  }
+  // CDN (leaflet, fonter): cache først — innholdet er versjonslåst
+  if (url.hostname === "unpkg.com" || url.hostname.endsWith("gstatic.com") || url.hostname.endsWith("googleapis.com")) {
+    e.respondWith(
+      caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
+        if (res.ok) {
+          const kopi = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, kopi));
+        }
+        return res;
+      }))
+    );
+  }
 });
