@@ -111,6 +111,9 @@ input:focus,select:focus,button:focus-visible,a:focus-visible{outline:2px solid 
 .adrtreff button:hover,.adrtreff button:focus-visible{border-color:var(--accent)}
 .adrstatus{font-size:12px; color:var(--muted); margin-top:5px; text-transform:none; letter-spacing:0}
 .adrstatus.ok{color:var(--ok)}
+.bryter{flex-direction:row; align-items:center; gap:9px; margin-top:12px; text-transform:none;
+  letter-spacing:0; font-size:13px; color:var(--fg); cursor:pointer}
+.bryter input{width:auto; accent-color:var(--accent); flex:0 0 auto; width:20px; height:20px}
 .loggdag{color:var(--muted); font-size:12px; letter-spacing:.08em; text-transform:uppercase; margin:16px 0 6px}
 .loggrad{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 12px; background:var(--surface); border:1px solid var(--line); border-radius:10px; margin-bottom:6px}
 .loggrad .hva{min-width:0}
@@ -287,6 +290,7 @@ function startTur(){
         if(tur.punkter.length>4000) tur.punkter.splice(0,1000);
       }
       sistePos=pos;
+      vurderNaerhet();
     }
     if(gjeldendeFane()==="broyt") oppdaterTurpanel();
     if(gjeldendeFane()==="kart") oppdaterKartSpor();
@@ -295,7 +299,8 @@ function startTur(){
     visToast(err.code===1?"Posisjon avslått. Gi stedstilgang i nettleseren for GPS-logg.":"Fikk ikke posisjon ("+err.message+")",null);
     if(gjeldendeFane()==="broyt") oppdaterTurpanel();
   },{enableHighAccuracy:true, maximumAge:3000, timeout:20000});
-  tickTimer=setInterval(()=>{ if(gjeldendeFane()==="broyt") oppdaterTurpanel(); },30000);
+  // 1 s: nedtellingen til autologg skal telle synlig ned
+  tickTimer=setInterval(()=>{ vurderNaerhet(); if(gjeldendeFane()==="broyt") oppdaterTurpanel(); },1000);
   holdSkjermVaaken();
   tegn();
 }
@@ -342,6 +347,13 @@ function sisteJobbFor(kid){
 /* Nærhetsvarsel: under aktiv tur, finn nærmeste kunde (<100 m) som ikke er
    logget siste 6 t og ikke avvist i denne turen — mLogg/AutoReg-aktig autologging,
    med hindringsvarsel når du nærmer deg (punktvarsel). */
+/* Autologging: å kjøre FORBI en kunde skal ikke gi en loggført brøyting — det
+   ville gitt feil på fakturaen. Derfor kreves at du blir værende nær kunden en
+   stund, slik man gjør når man faktisk måker. Forbikjøring tar sekunder. */
+const NAER_RADIUS=100, AUTO_RADIUS=40, FORLAT_RADIUS=70, AUTO_SEK=45;
+let naerSiden=null, naerId=null, varselSignatur=null;
+const autologgPa=()=>state.innstillinger?state.innstillinger.autologg!==false:true;
+
 function naerKunde(){
   if(!tur||!sistePos) return null;
   let best=null;
@@ -350,9 +362,26 @@ function naerKunde(){
     const s=sisteJobbFor(k.id);
     if(s && (Date.now()-new Date(s.ts))<6*3600e3) continue;
     const d=haversine(sistePos,{lat:k.lat,lng:k.lng});
-    if(d<=100 && (!best||d<best.d)) best={k,d};
+    if(d<=NAER_RADIUS && (!best||d<best.d)) best={k,d};
   }
   return best;
+}
+// Kalles ved hver GPS-oppdatering: holder styr på hvor lenge du har stått ved kunden
+function vurderNaerhet(){
+  if(!tur||!sistePos){ naerSiden=null; naerId=null; return; }
+  const n=naerKunde();
+  if(!n){ naerSiden=null; naerId=null; return; }
+  if(n.k.id!==naerId){ naerId=n.k.id; naerSiden=n.d<=AUTO_RADIUS?Date.now():null; }
+  else if(n.d<=AUTO_RADIUS){ if(naerSiden==null) naerSiden=Date.now(); }
+  else if(n.d>FORLAT_RADIUS){ naerSiden=null; }   // kjørte videre — nullstill klokka
+  if(autologgPa() && naerSiden!=null && Date.now()-naerSiden>=AUTO_SEK*1000){
+    naerSiden=null; naerId=null;
+    loggJobb(n.k,"broyting",true);
+  }
+}
+function sekunderIgjen(){
+  if(naerSiden==null) return null;
+  return Math.max(0, AUTO_SEK-Math.round((Date.now()-naerSiden)/1000));
 }
 function naervarselHtml(){
   const n=naerKunde();
@@ -361,8 +390,13 @@ function naervarselHtml(){
     sistVarsletId=n.k.id;
     try{ navigator.vibrate&&navigator.vibrate(200); }catch{}
   }
+  const igjen=sekunderIgjen();
+  const nedtelling=(autologgPa()&&igjen!=null)
+    ? `<div class="under">Logges automatisk om <span id="auto-ned">${igjen}</span> s — kjør videre for å avbryte</div>`
+    : (autologgPa() ? '<div class="under">Stopp ved kunden, så logges brøytingen av seg selv</div>' : "");
   return `<div class="naervarsel"><div class="tittel">Du er ved ${esc(n.k.navn)}</div>
     <div class="under">${mFmt(n.d)} unna</div>
+    ${nedtelling}
     ${n.k.hindring?`<div class="hindring">⚠ ${esc(n.k.hindring)}</div>`:""}
     <div class="btnrow"><button class="btn-logg" data-logg="${n.k.id}" data-type="broyting">Brøytet nå</button>
     <button class="btn-sek" data-logg="${n.k.id}" data-type="stroing">Strødd nå</button>
@@ -379,7 +413,8 @@ function turpanelHtml(){
       <div><div class="tall">${tur.jobbIder.length}</div><div class="navn">Logget</div></div>
     </div>
     <div id="naervarsel">${naervarselHtml()}</div>
-    <div class="btnrow" style="margin-top:10px"><button class="btn-sek" id="stopp-tur" style="border-color:var(--danger);color:var(--danger)">Avslutt tur</button></div></div>`;
+    <label class="bryter"><input type="checkbox" id="autologg" ${autologgPa()?"checked":""}> Autologg når jeg stopper ved en kunde</label>
+    <div class="btnrow" style="margin-top:8px"><button class="btn-sek" id="stopp-tur" style="border-color:var(--danger);color:var(--danger)">Avslutt tur</button></div></div>`;
 }
 function oppdaterTurpanel(){
   if(!tur) return;
@@ -388,7 +423,18 @@ function oppdaterTurpanel(){
   if(tid) tid.textContent=varighet(Date.now()-new Date(tur.start));
   const st=document.querySelector(".turpanel .gps-status");
   if(st){ st.className="gps-status"+(gpsOk?" god":""); st.innerHTML=gpsStatusTekst(); }
-  const nv=$("#naervarsel"); if(nv) nv.innerHTML=naervarselHtml();
+  // Bytt ut hele kortet bare når noe endrer seg — ellers ville knappene
+  // forsvunnet under fingeren hvert sekund mens nedtellingen går
+  const nv=$("#naervarsel");
+  if(nv){
+    const n=naerKunde();
+    const sig=(n?n.k.id:"-")+":"+(naerSiden!=null?"ned":"vent")+":"+(autologgPa()?"på":"av");
+    if(sig!==varselSignatur){ nv.innerHTML=naervarselHtml(); varselSignatur=sig; }
+    else{
+      const ned=$("#auto-ned"), igjen=sekunderIgjen();
+      if(ned&&igjen!=null) ned.textContent=igjen;
+    }
+  }
 }
 function kundekort({k,sist,avstand}){
   const t=sist?relTid(sist.ts):"aldri logget";
@@ -447,6 +493,14 @@ function tegnBroyt(){
 function kobleTurknapper(){
   const s=$("#start-tur"); if(s) s.addEventListener("click",startTur);
   const p=$("#stopp-tur"); if(p) p.addEventListener("click",stoppTur);
+  const a=$("#autologg");
+  if(a) a.addEventListener("change",()=>{
+    state.innstillinger={...(state.innstillinger||{}), autologg:a.checked};
+    if(!a.checked) naerSiden=null;
+    lagre();
+    varselSignatur=null; oppdaterTurpanel();
+    visToast(a.checked?"Autologg på — stopp ved kunden i 45 sekunder":"Autologg av — du logger selv",null);
+  });
 }
 function tegnKart(){
   innhold.innerHTML='<h2>Kart</h2><div id="kart"></div><div class="notis">Gult spor: pågående eller siste tur. Markører: kunder med lagret posisjon.</div>';
@@ -485,7 +539,7 @@ function tegnLogg(){
     if(r.slag==="jobb"){
       const j=r.j;
       const pill=j.type==="stroing"?'<span class="type-pill type-stroing">strøing</span>':'<span class="type-pill type-broyting">brøyting</span>';
-      const pos=j.lat!=null?' <span class="under">· posisjon lagret</span>':"";
+      const pos=j.auto?' <span class="under">· autologget</span>':(j.lat!=null?' <span class="under">· posisjon lagret</span>':"");
       html+=`<div class="loggrad"><div class="hva">${esc(j.kundeNavn||"Ukjent")}${pill}${pos}</div>
         <div style="display:flex;gap:8px;align-items:center"><span class="tid">${klokke(j.ts)}</span>
         <button class="btn-ghost" data-slettjobb="${j.id}" aria-label="Slett">✕</button></div></div>`;
@@ -682,6 +736,19 @@ function tegnOversikt(){
 }
 
 /* ================= handlinger ================= */
+function loggJobb(k,type,auto){
+  const j={id:nyId(), kundeId:k.id, kundeNavn:k.navn, type, ts:new Date().toISOString()};
+  if(sistePos){ j.lat=sistePos.lat; j.lng=sistePos.lng; }
+  if(auto) j.auto=true;
+  state.jobber.push(j);
+  if(tur) tur.jobbIder.push(j.id);
+  sisteJobbId=j.id;
+  lagre();
+  const navn=type==="stroing"?"Strøing":"Brøyting";
+  visToast(auto?("Autologget "+navn.toLowerCase()+": "+k.navn):(navn+" logget: "+k.navn), true);
+  if(auto){ try{ navigator.vibrate&&navigator.vibrate([120,70,120]); }catch{} }
+  tegn();
+}
 function visToast(tekst, medAngre){
   $("#toasttekst").textContent=tekst;
   $("#angre").hidden=!medAngre;
@@ -693,14 +760,8 @@ document.addEventListener("click",e=>{
   const logg=e.target.closest("[data-logg]");
   if(logg){
     const k=state.kunder.find(x=>x.id===logg.dataset.logg); if(!k) return;
-    const j={id:nyId(), kundeId:k.id, kundeNavn:k.navn, type:logg.dataset.type, ts:new Date().toISOString()};
-    if(sistePos){ j.lat=sistePos.lat; j.lng=sistePos.lng; }
-    state.jobber.push(j);
-    if(tur) tur.jobbIder.push(j.id);
-    sisteJobbId=j.id;
-    lagre();
-    visToast((j.type==="stroing"?"Strøing":"Brøyting")+" logget: "+k.navn, true);
-    tegn();
+    if(k.id===naerId){ naerSiden=null; naerId=null; }   // manuell logging stopper nedtellingen
+    loggJobb(k,logg.dataset.type,false);
     return;
   }
   const av=e.target.closest("[data-avvis]");
